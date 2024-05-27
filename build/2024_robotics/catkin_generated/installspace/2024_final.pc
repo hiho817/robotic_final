@@ -1,0 +1,8 @@
+prefix=/home/kenny/Robotic/workspace_final/install
+
+Name: 2024_final
+Description: Description of 2024_final
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 
