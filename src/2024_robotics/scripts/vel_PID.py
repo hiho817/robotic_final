@@ -43,11 +43,11 @@ def pid_control(target, current, kp, ki, kd, integral, previous_error, dt):
     output = kp * error + ki * integral + kd * derivative
     return output, integral, error
 
-file_path = '/home/kenny/Robotic/workspace_final/src/2024_robotics/scripts/waypoint.txt'
+file_path = '/home/kenny/Robotic/workspace_final/src/2024_robotics/scripts/waypoint2.txt'
 waypoints = read_waypoints(file_path)
 
 if __name__ == "__main__":
-    rospy.init_node("min_snap_py")
+    rospy.init_node("vel_PID_py")
 
     state_sub = rospy.Subscriber("mavros/state", State, callback=state_cb)
     local_pos_sub = rospy.Subscriber("mavros/local_position/pose", PoseStamped, callback=pose_cb)
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     last_req = rospy.Time.now()
     waypoint_index = 0
 
-    kp = 1.0
+    kp = 1
     ki = 0.0
     kd = 0.1
 
