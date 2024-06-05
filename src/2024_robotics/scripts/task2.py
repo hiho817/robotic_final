@@ -8,6 +8,8 @@ from mavros_msgs.msg import State
 from mavros_msgs.srv import CommandBool, CommandBoolRequest, SetMode, SetModeRequest
 import math
 
+update_rate = 50.0
+
 current_state = State()
 current_pose = PoseStamped()
 
@@ -20,7 +22,7 @@ def Pose_cb(msg):
     current_pose = msg
 
 def distance(p1, p2):
-    return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 )
+    return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
 
 def correct_quaternion_to_rotation_matrix(q):
     qx, qy, qz, qw = q
@@ -30,7 +32,7 @@ def correct_quaternion_to_rotation_matrix(q):
         [2*qx*qz - 2*qw*qy, 2*qy*qz + 2*qw*qx, 1 - 2*qx**2 - 2*qy**2]
     ])
 
-def imu_callback(data):
+def imu_cb(data):
     quaternion = [
         data.orientation.x,
         data.orientation.y,
@@ -57,19 +59,45 @@ def imu_callback(data):
     acceleration_msg.x = linear_acceleration_motion[0]
     acceleration_msg.y = linear_acceleration_motion[1]
     acceleration_msg.z = linear_acceleration_motion[2]
+    rospy.loginfo("Publishing acceleration: %s", acceleration_msg)
+    get_pose(acceleration_msg)
     acceleration_pub.publish(acceleration_msg)
+
+def get_pose(acc):
+    dt = 1/update_rate # Assuming 50 Hz update rate
+
+    if not hasattr(get_pose, 'vel_prev'):
+        get_pose.vel_prev = Vector3()
+    if not hasattr(get_pose, 'pos_prev'):
+        get_pose.pos_prev = Vector3()
     
+    vel = Vector3()
+    vel.x = get_pose.vel_prev.x + acc.x * dt
+    vel.y = get_pose.vel_prev.y + acc.y * dt
+    vel.z = get_pose.vel_prev.z + acc.z * dt
+    
+    pos = Vector3()
+    pos.x = get_pose.pos_prev.x + vel.x * dt
+    pos.y = get_pose.pos_prev.y + vel.y * dt
+    pos.z = get_pose.pos_prev.z + vel.z * dt
+    
+    get_pose.vel_prev = vel
+    get_pose.pos_prev = pos
+    
+    velocity_pub.publish(vel)
+    position_pub.publish(pos)
 
 if __name__ == "__main__":
     rospy.init_node("task2_py")
 
     state_sub = rospy.Subscriber("mavros/state", State, callback=state_cb)
-    local_pos_sub = rospy.Subscriber("mavros/local_position/pose", PoseStamped, callback = Pose_cb)
+    local_pos_sub = rospy.Subscriber("mavros/local_position/pose", PoseStamped, callback=Pose_cb)
+    rospy.Subscriber('/mavros/imu/data', Imu, imu_cb)
 
     local_pos_pub = rospy.Publisher("mavros/setpoint_position/local", PoseStamped, queue_size=10)
-    acceleration_pub = rospy.Publisher('/linear_acceleration_world', Vector3, queue_size=10)
-
-    rospy.Subscriber('/mavros/imu/data', Imu, imu_callback)
+    acceleration_pub = rospy.Publisher('/world_acceleration', Vector3, queue_size=10)
+    velocity_pub = rospy.Publisher('/world_velocity', Vector3, queue_size=10)
+    position_pub = rospy.Publisher('/world_position', Vector3, queue_size=10)
     
     rospy.wait_for_service("/mavros/cmd/arming")
     arming_client = rospy.ServiceProxy("mavros/cmd/arming", CommandBool)
@@ -77,7 +105,7 @@ if __name__ == "__main__":
     rospy.wait_for_service("/mavros/set_mode")
     set_mode_client = rospy.ServiceProxy("mavros/set_mode", SetMode)
     
-    rate = rospy.Rate(50)
+    rate = rospy.Rate(update_rate)
     # Define waypoints
     def Waypoint(x, y, z):
         set_point = PoseStamped()
@@ -131,7 +159,7 @@ if __name__ == "__main__":
                     rospy.loginfo("Vehicle armed")
                 last_req = rospy.Time.now()
 
-        if distance(current_pose.pose.position, waypoints[waypoint_index].pose.position) < 2 :
+        if distance(current_pose.pose.position, waypoints[waypoint_index].pose.position) < 2:
             waypoint_index += 1
             if waypoint_index >= len(waypoints):
                 waypoint_index -= 1
