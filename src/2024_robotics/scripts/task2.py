@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import rospy
 import numpy as np
 from sensor_msgs.msg import Imu
@@ -7,8 +5,24 @@ from geometry_msgs.msg import PoseStamped, Vector3
 from mavros_msgs.msg import State
 from mavros_msgs.srv import CommandBool, CommandBoolRequest, SetMode, SetModeRequest
 import math
+from filterpy.kalman import UnscentedKalmanFilter as UKF
+from filterpy.kalman import MerweScaledSigmaPoints
+from filterpy.common import Q_discrete_white_noise
 
-update_rate = 50.0
+update_rate = 50
+
+# UKF parameters
+dim_x = 6  # State dimensions [x, y, z, vx, vy, vz]
+dim_z = 3  # Measurement dimensions [x, y, z]
+dt = 1.0 / update_rate
+
+# Initialize UKF
+sigmas = MerweScaledSigmaPoints(dim_x, alpha=0.1, beta=2., kappa=1.)
+ukf = UKF(dim_x=dim_x, dim_z=dim_z, dt=dt, hx=lambda x: x[:3], fx=f_cv, points=sigmas)
+ukf.x = np.zeros(dim_x)
+ukf.P = np.eye(dim_x) * 0.1
+ukf.R = np.eye(dim_z) * 0.1  # Measurement noise
+ukf.Q = Q_discrete_white_noise(dim=dim_x, dt=dt, var=0.1)  # Process noise
 
 current_state = State()
 current_pose = PoseStamped()
@@ -22,9 +36,10 @@ def Pose_cb(msg):
     current_pose = msg
 
 def distance(p1, p2):
-    return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
+    return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 )
 
 def correct_quaternion_to_rotation_matrix(q):
+    """ Convert a quaternion into a rotation matrix """
     qx, qy, qz, qw = q
     return np.array([
         [1 - 2*qy**2 - 2*qz**2, 2*qx*qy - 2*qw*qz, 2*qx*qz + 2*qw*qy],
@@ -55,44 +70,37 @@ def imu_cb(data):
     gravity = np.array([0, 0, 9.81])
     linear_acceleration_motion = linear_acceleration_world - gravity
     
+    # Perform UKF prediction step
+    ukf.predict(dt=dt, accel=linear_acceleration_motion[:2])
+    
     acceleration_msg = Vector3()
     acceleration_msg.x = linear_acceleration_motion[0]
     acceleration_msg.y = linear_acceleration_motion[1]
     acceleration_msg.z = linear_acceleration_motion[2]
     rospy.loginfo("Publishing acceleration: %s", acceleration_msg)
-    get_pose(acceleration_msg)
     acceleration_pub.publish(acceleration_msg)
 
-def get_pose(acc):
-    dt = 1/update_rate # Assuming 50 Hz update rate
-
-    if not hasattr(get_pose, 'vel_prev'):
-        get_pose.vel_prev = Vector3()
-    if not hasattr(get_pose, 'pos_prev'):
-        get_pose.pos_prev = Vector3()
+def apriltag_cb(data):
+    # Extract AprilTag position from the message
+    apriltag_position = np.array([data.pose.position.x, data.pose.position.y, data.pose.position.z])
     
-    vel = Vector3()
-    vel.x = get_pose.vel_prev.x + acc.x * dt
-    vel.y = get_pose.vel_prev.y + acc.y * dt
-    vel.z = get_pose.vel_prev.z + acc.z * dt
+    # Perform UKF update step
+    ukf.update(apriltag_position)
     
-    pos = Vector3()
-    pos.x = get_pose.pos_prev.x + vel.x * dt
-    pos.y = get_pose.pos_prev.y + vel.y * dt
-    pos.z = get_pose.pos_prev.z + vel.z * dt
-    
-    get_pose.vel_prev = vel
-    get_pose.pos_prev = pos
-    
-    velocity_pub.publish(vel)
-    position_pub.publish(pos)
+    # Publish the estimated position
+    estimated_position = Vector3()
+    estimated_position.x = ukf.x[0]
+    estimated_position.y = ukf.x[1]
+    estimated_position.z = ukf.x[2]
+    position_pub.publish(estimated_position)
 
 if __name__ == "__main__":
     rospy.init_node("task2_py")
 
     state_sub = rospy.Subscriber("mavros/state", State, callback=state_cb)
-    local_pos_sub = rospy.Subscriber("mavros/local_position/pose", PoseStamped, callback=Pose_cb)
+    local_pos_sub = rospy.Subscriber("mavros/local_position/pose", Pose_cb)
     rospy.Subscriber('/mavros/imu/data', Imu, imu_cb)
+    rospy.Subscriber('/apriltag/pose', PoseStamped, apriltag_cb)  # Assuming AprilTag pose topic
 
     local_pos_pub = rospy.Publisher("mavros/setpoint_position/local", PoseStamped, queue_size=10)
     acceleration_pub = rospy.Publisher('/world_acceleration', Vector3, queue_size=10)
